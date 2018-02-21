@@ -1,6 +1,8 @@
 from random import seed, random
 from sys import argv
 from time import time
+import pickle
+import copy
 
 import numpy as np
 import torch
@@ -10,7 +12,10 @@ import torch.multiprocessing as mp
 import torchvision
 import torchvision.transforms as transforms
 
+# Data saving stuff
+model_save_path = './model'
 
+# Parameters
 lr = 1e-4
 sigma = 0.05
 batch_size = 1
@@ -27,17 +32,27 @@ testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle
 
 
 def noise_model(model, seed):
+    '''
+    Perturb the model with the given `seed`.
+    '''
     np.random.seed(seed)
     for w in model.parameters():
-        w.data += (np.random.normal(0, 1) * lr)
+        rands = np.random.normal(0, 1, w.size())
+        w.data += torch.from_numpy(rands * sigma).float()
     return model
 
 
 def quantize(model):
+    '''
+    Quantize the model.  It is the quantized copy that gets fed into `evaluate()`.
+    '''
     return model
 
 
 def evaluate(model):
+    '''
+    Run through the test images, and see how well we're doing. Return our score. Lower is better.
+    '''
     def one_hot(i, n):
         l = [0.0] * n
         l[i] = 1.0
@@ -52,26 +67,29 @@ def evaluate(model):
     return error / batch_size / N
 
 
+class Net(nn.Module):
+    '''The model. This needs to be stored at the top level of the file, so that
+    we can serialize it.'''
+    def __init__(self):
+        super(Net, self).__init__()
+        self.conv1 = nn.Conv2d(1, 32, 5, padding=2)
+        self.conv2 = nn.Conv2d(32, 64, 5, padding=2)
+        self.lin = nn.Linear(7 * 7 * 64, 10)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = F.relu(x)
+        x = F.max_pool2d(x, 2)
+        x = self.conv2(x)
+        x = F.relu(x)
+        x = F.max_pool2d(x, 2)
+        x = x.view(-1, 7 * 7 * 64)
+        x = self.lin(x)
+        return F.relu(x)
+
+
 def make_model():
     '''Construct the initial pytorch model'''
-    class Net(nn.Module):
-        def __init__(self):
-            super(Net, self).__init__()
-            self.conv1 = nn.Conv2d(1, 32, 5, padding=2)
-            self.conv2 = nn.Conv2d(32, 64, 5, padding=2)
-            self.lin = nn.Linear(7 * 7 * 64, 10)
-
-        def forward(self, x):
-            x = self.conv1(x)
-            x = F.relu(x)
-            x = F.max_pool2d(x, (2, 2))
-            x = self.conv2(x)
-            x = F.relu(x)
-            x = F.max_pool2d(x, 2)
-            x = x.view(-1, 7 * 7 * 64)
-            x = self.lin(x)
-            return x
-
     return Net()
 
 
@@ -87,10 +105,12 @@ def get_next_model_main(results):
     s = sum(map(lambda t: t[0], normalized_scores))
     return [(score / s, seeds[i]) for (score, i) in normalized_scores]
 
+
 def get_next_model_child(model, results):
     '''
-    model is the current full precision model.
-    results is whatever get_next_model_main() returned.'''
+    `model` is the current full precision model.
+    `results` is whatever get_next_model_main() returned.
+    '''
     for param in model.state_dict().values():
         N = param.size()
         update = np.zeros(N)
@@ -121,14 +141,14 @@ def thread_loop(in_queue, out_queue, model, args):
     for _ in range(args['num_epochs']):
         s = int(random() * (2**32))
         args['start_barrier'].wait()
-        model_n = noise_model(model, s)
+        model_n = noise_model(copy.deepcopy(model), s)
         model_q = quantize(model_n)
         score = evaluate(model_q)
         out_queue.put((score, s))
         reconstruct_data = in_queue.get()
         model = get_next_model_child(model, reconstruct_data)
+        # print('reconstructed model score: ', evaluate(model))
         args['end_barrier'].wait()
-
 
 
 def main_loop():
@@ -146,6 +166,8 @@ def main_loop():
 
     # TODO: remove deterministic seed
     seed(0)
+    np.random.seed(0)
+    torch.manual_seed(0)
 
     torch.set_num_threads(1)
     num_epochs = 5 # 100
@@ -168,26 +190,36 @@ def main_loop():
         p.start()
         processes.append(p)
 
-    # Get scores, find best, and report back.
-    t = 0.0
+    start_time = time()
     for _epoch in range(num_epochs):
-        t0 = time()
         results = [score_queue.get() for _ in range(n_processes)]
         results.sort()
-        print('best score: {}'.format(results[0][0]))
-        ret = get_next_model_main(results)
+        model_builder = get_next_model_main(results)
         for _ in range(n_processes):
-            model_queue.put(ret)
-        t1 = time()
-        t += t1 - t0
-    t /= num_epochs
-    print('Evaluated {} models in {:4.2f} secs ({} ms/m)'.format(
-        n_processes, t, t / n_processes * 1000))
+            model_queue.put(model_builder)
+        print(results)
+        print('[{:4.1f}] best score: {}'.format(time() - start_time, results[0][0]))
+        model = get_next_model_child(model, model_builder)
+        save_model(model, model_save_path)
 
     # We are done.
     for p in processes:
         p.join()
 
 
+def save_model(model, path):
+    '''Saves the current model to the file specified'''
+    with open(path, 'wb') as f:
+        pickle.dump(model, f)
+
+
+def load_model(path):
+    '''Load the model form the specified file'''
+    with open(path, 'rb') as f:
+        return pickle.load(f)
+
+
 if __name__ == '__main__':
+    # TODO: add argument handling, so that we can pass sigma, lr, and whether to train a new model
+    # or load an old one.
     main_loop()
