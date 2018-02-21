@@ -10,21 +10,20 @@ import torch.multiprocessing as mp
 import torchvision
 import torchvision.transforms as transforms
 
-transform = transforms.Compose(
-    [transforms.ToTensor(),
-         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-
-trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=4, shuffle=True)
-
-testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
-testloader = torch.utils.data.DataLoader(testset, batch_size=4, shuffle=False)
-
-classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 
 lr = 1e-4
 sigma = 0.05
 batch_size = 1
+
+transform = transforms.Compose(
+    [transforms.ToTensor(),
+         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+
+trainset = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transform)
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True)
+
+testset = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=transform)
+testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False)
 
 
 def noise_model(model, seed):
@@ -45,14 +44,12 @@ def evaluate(model):
         return l
     error = 0.0
     N = len(trainloader)
-    for (i, data) in enumerate(trainloader, 1):
-        # TODO: use whole data set
-        if i > 1000: break;
+    for (i, data) in enumerate(testloader, 1):
         inputs, _labels = data
         outputs = model(torch.autograd.Variable(inputs)).data
         labels = torch.Tensor([one_hot(int(i), 10) for i in _labels])
-        error += (outputs - labels).abs().sum()
-    return error
+        error += (outputs - labels).pow(2).sum()
+    return error / batch_size / N
 
 
 def make_model():
@@ -60,16 +57,18 @@ def make_model():
     class Net(nn.Module):
         def __init__(self):
             super(Net, self).__init__()
-            self.conv1 = nn.Conv2d(3, 6, 5)
-            self.conv2 = nn.Conv2d(6, 12, 5)
-            self.lin = nn.Linear(24 * 24 * 12, 10)
+            self.conv1 = nn.Conv2d(1, 32, 5, padding=2)
+            self.conv2 = nn.Conv2d(32, 64, 5, padding=2)
+            self.lin = nn.Linear(7 * 7 * 64, 10)
 
         def forward(self, x):
             x = self.conv1(x)
             x = F.relu(x)
+            x = F.max_pool2d(x, (2, 2))
             x = self.conv2(x)
             x = F.relu(x)
-            x = x.view(-1, 24 * 24 * 12)
+            x = F.max_pool2d(x, 2)
+            x = x.view(-1, 7 * 7 * 64)
             x = self.lin(x)
             return x
 
@@ -157,8 +156,6 @@ def main_loop():
         'end_barrier': mp.Barrier(n_processes),
     }
 
-    print('each process uses %d threads' % torch.get_num_threads())
-
     model_queue = mp.Queue()
     score_queue = mp.Queue()
     model = make_model()
@@ -177,7 +174,7 @@ def main_loop():
         t0 = time()
         results = [score_queue.get() for _ in range(n_processes)]
         results.sort()
-        print('best score: %d' % results[0][0])
+        print('best score: {}'.format(results[0][0]))
         ret = get_next_model_main(results)
         for _ in range(n_processes):
             model_queue.put(ret)
