@@ -58,13 +58,18 @@ def evaluate(model):
         l[i] = 1.0
         return l
     error = 0.0
-    N = len(trainloader)
+    N = len(testloader)
+    correct = 0
     for (i, data) in enumerate(testloader, 1):
         inputs, _labels = data
-        outputs = model(torch.autograd.Variable(inputs)).data
+        outputs = model(torch.autograd.Variable(inputs))
         labels = torch.Tensor([one_hot(int(i), 10) for i in _labels])
-        error += (outputs - labels).pow(2).sum()
-    return error / batch_size / N
+        error += (outputs.data - labels).pow(2).sum()
+
+        pred = outputs.max(1, keepdim=True)[1]
+        target = torch.autograd.Variable(_labels.view_as(pred))
+        correct += int(pred.eq(target).sum())
+    return (error / batch_size / N, correct / batch_size / N)
 
 
 class Net(nn.Module):
@@ -170,7 +175,7 @@ def main_loop():
     torch.manual_seed(0)
 
     torch.set_num_threads(1)
-    num_epochs = 5 # 100
+    num_epochs = 1000
     n_processes = int(argv[1]) # mp.cpu_count()
     args = {
         'num_epochs': num_epochs,
@@ -191,16 +196,16 @@ def main_loop():
         processes.append(p)
 
     start_time = time()
-    for _epoch in range(num_epochs):
+    for epoch in range(num_epochs):
         results = [score_queue.get() for _ in range(n_processes)]
         results.sort()
-        model_builder = get_next_model_main(results)
+        model_builder = get_next_model_main([(score, seed) for ((score, _), seed) in results])
         for _ in range(n_processes):
             model_queue.put(model_builder)
-        print(results)
-        print('[{:4.1f}] best score: {}'.format(time() - start_time, results[0][0]))
         model = get_next_model_child(model, model_builder)
         save_model(model, model_save_path)
+        print('epoch: {:4}; time: {:5.0f}; best score: {:1.5f}; accuracy: {:1.3f}'.format(
+            epoch, time() - start_time, results[0][0][0], results[0][0][1]))
 
     # We are done.
     for p in processes:
