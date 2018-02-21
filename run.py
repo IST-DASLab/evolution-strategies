@@ -2,7 +2,6 @@ from random import seed, random
 from sys import argv
 from time import time
 
-
 import numpy as np
 import torch
 from torch import nn
@@ -16,14 +15,16 @@ transform = transforms.Compose(
          transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
 trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=4, shuffle=True, num_workers=2)
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=4, shuffle=True)
 
 testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
-testloader = torch.utils.data.DataLoader(testset, batch_size=4, shuffle=False, num_workers=2)
+testloader = torch.utils.data.DataLoader(testset, batch_size=4, shuffle=False)
 
 classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 
 lr = 1e-4
+sigma = 0.05
+batch_size = 1
 
 
 def noise_model(model, seed):
@@ -46,7 +47,7 @@ def evaluate(model):
     N = len(trainloader)
     for (i, data) in enumerate(trainloader, 1):
         # TODO: use whole data set
-        if i > 2000: break;
+        if i > 1000: break;
         inputs, _labels = data
         outputs = model(torch.autograd.Variable(inputs)).data
         labels = torch.Tensor([one_hot(int(i), 10) for i in _labels])
@@ -81,13 +82,26 @@ def get_next_model_main(results):
     It is sorted. Whatever is returned here is sent to all children and given to
     `get_next_model_child()`
     '''
-    return results[0][1]
+    [scores, seeds] = map(list, zip(*results))
+    norm = lambda s: (s - scores[0]) / (scores[-1] - scores[0])
+    normalized_scores = [(1 - norm(s), i) for (i, s) in enumerate(scores)]
+    s = sum(map(lambda t: t[0], normalized_scores))
+    return [(score / s, seeds[i]) for (score, i) in normalized_scores]
 
 def get_next_model_child(model, results):
     '''
     model is the current full precision model.
     results is whatever get_next_model_main() returned.'''
-    return noise_model(model, results)
+    for param in model.state_dict().values():
+        N = param.size()
+        update = np.zeros(N)
+        for (frac, seed) in results:
+            np.random.seed(seed)
+            rands = np.random.normal(0, 1, N)
+            update += lr / (batch_size * sigma) * frac * rands
+        asd = torch.from_numpy(update).float()
+        param += asd
+    return model
 
 
 def thread_loop(in_queue, out_queue, model, args):
@@ -105,7 +119,7 @@ def thread_loop(in_queue, out_queue, model, args):
     '''
     seed(args['seed'])
 
-    for _ in range(args['num_iters']):
+    for _ in range(args['num_epochs']):
         s = int(random() * (2**32))
         args['start_barrier'].wait()
         model_n = noise_model(model, s)
@@ -135,10 +149,10 @@ def main_loop():
     seed(0)
 
     torch.set_num_threads(1)
-    num_iters = 5 # 100
+    num_epochs = 5 # 100
     n_processes = int(argv[1]) # mp.cpu_count()
     args = {
-        'num_iters': num_iters,
+        'num_epochs': num_epochs,
         'start_barrier': mp.Barrier(n_processes),
         'end_barrier': mp.Barrier(n_processes),
     }
@@ -159,16 +173,17 @@ def main_loop():
 
     # Get scores, find best, and report back.
     t = 0.0
-    for i in range(num_iters):
+    for _epoch in range(num_epochs):
         t0 = time()
         results = [score_queue.get() for _ in range(n_processes)]
         results.sort()
+        print('best score: %d' % results[0][0])
         ret = get_next_model_main(results)
         for _ in range(n_processes):
             model_queue.put(ret)
         t1 = time()
         t += t1 - t0
-    t /= num_iters
+    t /= num_epochs
     print('Evaluated {} models in {:4.2f} secs ({} ms/m)'.format(
         n_processes, t, t / n_processes * 1000))
 
