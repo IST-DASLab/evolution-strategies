@@ -1,6 +1,7 @@
 import random
 import math
 from time import time
+import argparse
 
 import numpy as np
 import torch
@@ -8,10 +9,9 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 
 import base
-from base import ES
 
 
-class Regression(ES):
+class Regression(base.ES):
 
     def __init__(self, model):
         super(Regression, self).__init__(model)
@@ -39,6 +39,7 @@ class Regression(ES):
                 return x.mm(W_target) + b_target[0]
 
             """Builds a batch i.e. (x, f(x)) pair."""
+            random_batch = torch.randn(batch_size)
             x = make_features(random_batch)
             y = f(x)
             return Variable(x), Variable(y)
@@ -99,15 +100,14 @@ class Regression(ES):
 
 LR = 0.001
 SIGMA = 0.002
+
 POLY_DEGREE = 6
-
-
 W_target = torch.randn(POLY_DEGREE, 1) * 5
 b_target = torch.randn(1) * 5
 
+
 model = Regression(torch.nn.Linear(W_target.size(0), 1))
 batch_size = 32
-random_batch = torch.randn(batch_size)
 
 
 def poly_desc(W, b):
@@ -118,10 +118,27 @@ def poly_desc(W, b):
     result += '{:+6.3f}'.format(b[0])
     return result
 
+
+
 if __name__ == '__main__':
-    num_p = 2
+    parser = argparse.ArgumentParser(description='ES')
+    parser.add_argument('--lr', type=float, default=0.001, metavar='LR',
+                        help='learning rate')
+    parser.add_argument('--sigma', type=float, default=0.002, metavar='SD',
+                        help='noise standard deviation')
+    parser.add_argument('-n', type=int, default=2, metavar='processes',
+                        help='number of processes')
+    parser.add_argument('-e', type=int, default=1000, metavar='epochs',
+                        help='number of epochs')
+    parser.add_argument('-p', type=int, default=10000, metavar='population',
+                        help='population size')
+    args = parser.parse_args()
+
+    LR = args.lr
+    SIGMA = args.sigma
+
     base.main_loop(model,
-                   num_epochs=2000,
-                   offspring_per_process=10000 // num_p,
-                   num_processes=num_p,
+                   num_epochs=args.e,
+                   offspring_per_process=args.p // args.n,
+                   num_processes=args.n,
                    seed=0)
