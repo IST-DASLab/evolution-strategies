@@ -17,6 +17,7 @@ class Regression(ES):
         super(Regression, self).__init__(model)
         self.epoch_count = 0;
         self.previous_time = time()
+        self.start_time = self.previous_time
 
     def perturb(self, model, seed):
         np.random.seed(seed)
@@ -32,7 +33,7 @@ class Regression(ES):
             x = x.unsqueeze(1)
             return torch.cat([x ** i for i in range(1, POLY_DEGREE+1)], 1)
 
-        def get_batch(batch_size=32):
+        def get_batch(batch_size):
             def f(x):
                 """Approximated function."""
                 return x.mm(W_target) + b_target[0]
@@ -45,7 +46,7 @@ class Regression(ES):
         data, real = get_batch(batch_size)
         output = model(data)
         err = float(F.smooth_l1_loss(output, real).data[0])
-        return err
+        return err / batch_size
 
     def post_perturb(self, model):
         # TODO: quantize here
@@ -87,9 +88,11 @@ class Regression(ES):
         print('Learned function: ' + poly_desc(self.model.weight.data.view(-1),
                                                self.model.bias.data))
         print('Actual function:  ' + poly_desc(W_target.view(-1), b_target))
-        print('epoch: {:4}; time: {:5.0f}; best score: {:1.5f}'.format(self.epoch_count,
-                                                                       t - self.previous_time,
-                                                                       results[0][0]))
+        print('epoch: {:4}; time: {:5.0f} ({:4.0f}ms); best score: {:1.5f}'.format(
+            self.epoch_count,
+            t - self.start_time,
+            (t - self.previous_time) * 1000,
+            results[0][0]))
         self.previous_time = t
         self.epoch_count += 1
 
