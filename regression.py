@@ -39,7 +39,6 @@ class Regression(base.ES):
                 return x.mm(W_target) + b_target[0]
 
             """Builds a batch i.e. (x, f(x)) pair."""
-            random_batch = torch.randn(batch_size)
             x = make_features(random_batch)
             y = f(x)
             return Variable(x), Variable(y)
@@ -62,7 +61,7 @@ class Regression(base.ES):
         if results[-1][0] == results[0][0]:
             return [(0, s) for (n, s) in results]
         normalize = lambda n: 1 - ((n - results[0][0]) / (results[-1][0] - results[0][0]))
-        _sum = sum(normalize(n) for (n, _) in results)
+        _sum = 1 # sum(normalize(n) for (n, _) in results)
         return [(normalize(n) / _sum, s) for (n, s) in results]
 
     def reconstruct(self, model, results):
@@ -70,17 +69,18 @@ class Regression(base.ES):
         `model` is the current full precision model.
         `results` is whatever aggregate_results() returned.
         '''
-        if self.debug:
-            print()
-        for param in model.state_dict().values():
-            N = param.size()
-            update = np.zeros(N)
-            for (frac, seed) in results:
-                np.random.seed(seed)
-                rands = np.random.normal(0, 1, N)
-                update += frac * rands
-            update *= 1 / (len(results) * SIGMA ** 2)
-            param += torch.from_numpy(update * LR).float()
+        updates = [torch.Tensor(w.size()).zero_() for w in model.parameters()]
+
+        for (frac, seed) in results:
+            np.random.seed(seed)
+            for (i, w) in enumerate(model.parameters()):
+                rands = np.random.normal(0, SIGMA, w.size())
+                noise = torch.from_numpy(rands).float() * frac
+                updates[i] += noise
+        N = len(results)
+        factor = 1 / (N * SIGMA)
+        for (w, u) in zip(model.parameters(), updates):
+            w.data += u * factor
         return model
 
     def post_epoch(self, results, aggr):
@@ -96,10 +96,20 @@ class Regression(base.ES):
             results[0][0]))
         self.previous_time = t
         self.epoch_count += 1
+        global LR, SIGMA
+        LR *= 0.9995
+        SIGMA *= 0.9995
 
 
 LR = 0.001
 SIGMA = 0.002
+
+# for reproducability
+SEED = 0
+
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
 
 POLY_DEGREE = 6
 W_target = torch.randn(POLY_DEGREE, 1) * 5
@@ -108,6 +118,7 @@ b_target = torch.randn(1) * 5
 
 model = Regression(torch.nn.Linear(W_target.size(0), 1))
 batch_size = 32
+random_batch = torch.randn(batch_size)
 
 
 def poly_desc(W, b):
@@ -141,4 +152,4 @@ if __name__ == '__main__':
                    num_epochs=args.e,
                    offspring_per_process=args.p // args.n,
                    num_processes=args.n,
-                   seed=0)
+                   seed=SEED)
