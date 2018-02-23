@@ -1,5 +1,6 @@
 import random
 import math
+from time import time
 
 import numpy as np
 import torch
@@ -10,15 +11,12 @@ import base
 from base import ES
 
 
-LR = 0.001
-SIGMA = 0.002
-POLY_DEGREE = 6
-
-
 class Regression(ES):
 
     def __init__(self, model):
         super(Regression, self).__init__(model)
+        self.epoch_count = 0;
+        self.previous_time = time()
 
     def perturb(self, model, seed):
         np.random.seed(seed)
@@ -40,7 +38,7 @@ class Regression(ES):
                 return x.mm(W_target) + b_target[0]
 
             """Builds a batch i.e. (x, f(x)) pair."""
-            x = make_features(random)
+            x = make_features(random_batch)
             y = f(x)
             return Variable(x), Variable(y)
 
@@ -50,7 +48,7 @@ class Regression(ES):
         return err
 
     def post_perturb(self, model):
-        '''Probably insert quantization here!'''
+        # TODO: quantize here
         return model
 
     def aggregate_results(self, results):
@@ -71,8 +69,6 @@ class Regression(ES):
         `results` is whatever aggregate_results() returned.
         '''
         if self.debug:
-            print('==> Learned function: ' + poly_desc(model.weight.data.view(-1), model.bias.data))
-            print('==> Actual function:  ' + poly_desc(W_target.view(-1), b_target))
             print()
         for param in model.state_dict().values():
             N = param.size()
@@ -85,13 +81,31 @@ class Regression(ES):
             param += torch.from_numpy(update * LR).float()
         return model
 
+    def post_epoch(self, results, aggr):
+        t = time()
+        self.model = self.reconstruct(self.model, aggr)
+        print('Learned function: ' + poly_desc(self.model.weight.data.view(-1),
+                                               self.model.bias.data))
+        print('Actual function:  ' + poly_desc(W_target.view(-1), b_target))
+        print('epoch: {:4}; time: {:5.0f}; best score: {:1.5f}'.format(self.epoch_count,
+                                                                       t - self.previous_time,
+                                                                       results[0][0]))
+        self.previous_time = t
+        self.epoch_count += 1
+
+
+LR = 0.001
+SIGMA = 0.002
+POLY_DEGREE = 6
+
 
 W_target = torch.randn(POLY_DEGREE, 1) * 5
 b_target = torch.randn(1) * 5
 
 model = Regression(torch.nn.Linear(W_target.size(0), 1))
 batch_size = 32
-random = torch.randn(batch_size)
+random_batch = torch.randn(batch_size)
+
 
 def poly_desc(W, b):
     """Creates a string description of a polynomial."""
@@ -101,16 +115,10 @@ def poly_desc(W, b):
     result += '{:+6.3f}'.format(b[0])
     return result
 
-
-
-def run():
-    np = 2
-    base.main_loop(
-            model,
-            num_epochs=2000,
-            offspring_per_process=10000 // np,
-            num_processes=np,
-            seed=0)
-
 if __name__ == '__main__':
-    run()
+    num_p = 2
+    base.main_loop(model,
+                   num_epochs=2000,
+                   offspring_per_process=10000 // num_p,
+                   num_processes=num_p,
+                   seed=0)

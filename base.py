@@ -14,15 +14,20 @@ class ES():
         self.debug = False
 
     def perturb(self, model, seed):
+        '''Perturb the given model in some way, using the provided seed.'''
         raise NotImplementedError('Please supply an `perturb` method when subclassing ES')
 
     def evaluate(self, model):
+        '''Evaluate the model. Return a single floating point number.'''
         raise NotImplementedError('Please supply an `evaluate` method when subclassing ES')
 
     def pre_perturb(self, model):
+        '''Execute this before doing the perturbation'''
         return model
 
     def post_perturb(self, model):
+        '''Execute this after doing the perturbation. This is useful if one eg. wants to
+        quantize the model'''
         return model
 
     def aggregate_results(results):
@@ -31,7 +36,15 @@ class ES():
         pass
 
     def reconstruct(self, model, aggr):
+        '''Reconstruct the model given the current model, and the aggregated result obtained
+        from calling `aggregate_results`'''
         raise NotImplementedError('Please supply a `reconstruct` method when subclassing ES')
+
+    def post_epoch(self, results, aggr):
+        '''This is ran after each epoch, with the aggregated result from this run.
+        With this it is possible to keep track of the best model across every epoch, and
+        print out statistics for it, or to save the current best model to disk.'''
+        pass
 
 
 def thread_loop(
@@ -124,15 +137,11 @@ def main_loop(
     start_time = time()
     for epoch in range(num_epochs):
         results = [score_queue.get() for _ in range(num_processes * offspring_per_process)]
-
+        results.sort()
         aggr = es.aggregate_results(results)
         for _ in range(num_processes):
             model_queue.put(aggr)
-
-        if save_model:
-            save_model(model, model_save_path)
-        print('epoch: {:4}; time: {:5.0f}; best score: {:1.5f}'.format(
-            epoch, time() - start_time, results[0][0]))
+        es.post_epoch(results, aggr)
 
     # We are done.
     for p in processes:
