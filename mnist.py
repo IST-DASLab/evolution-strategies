@@ -131,8 +131,6 @@ class MNIST(base.ES):
                 updates[i] += noise
         N = len(results)
         factor = 1 / (N * SIGMA)
-        print('facotr', factor)
-        print(updates)
         for (w, u) in zip(model.parameters(), updates):
             w.data += u * factor
         return model
@@ -154,16 +152,18 @@ class MNIST(base.ES):
                 target = torch.autograd.Variable(_labels.view_as(pred))
                 correct += int(pred.eq(target).sum())
             return correct / batch_size / N
+        t0 = time()
         self.model = self.reconstruct(self.model, aggr)
         prec = calc_precision()
-        t = time()
-        print('epoch: {:4}; time: {:5.0f} ({:4.0f}ms); best score: {:1.5f}; precision: {:1.5f}'.format(
+        t1 = time()
+        print('epoch: {:4}; time: {:5.0f} ({:4.0f}ms; overhead {:4.0f}ms); best score: {:1.5f}; precision: {:1.5f}'.format(
             self.epoch_count,
-            t - self.start_time,
-            (t - self.previous_time) * 1000,
+            t1 - self.start_time,
+            (t0 - self.previous_time) * 1000,
+            (t1 - t0) * 1000,
             results[0][0],
             prec))
-        self.previous_time = t
+        self.previous_time = t1
         self.epoch_count += 1
 
 
@@ -173,7 +173,32 @@ random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
 
-model = MNIST(SmallNet())
+model = MNIST(Net())
+
+# import pickle
+# for INDEX in range(1, 6):
+#     with open('mnist-large-{}'.format(INDEX), 'rb') as f:
+#         net = pickle.load(f)
+#
+#     model = MNIST(net).model
+#
+#     error = 0.0
+#     N = len(testloader)
+#     correct = 0
+#     for (i, data) in enumerate(testloader, 1):
+#         inputs, _labels = data
+#         Variable = torch.autograd.Variable
+#         outputs = model(Variable(inputs))
+#
+#         ce = F.cross_entropy(outputs, Variable(_labels))
+#         error += float(ce)
+#
+#         pred = outputs.max(1, keepdim=True)[1]
+#         target = torch.autograd.Variable(_labels.view_as(pred))
+#         correct += int(pred.eq(target).sum())
+#     print('i={}, precision={}, error={}'.format(INDEX, correct / batch_size / N, error))
+# import sys
+# sys.exit(0)
 
 def poly_desc(W, b):
     """Creates a string description of a polynomial."""
